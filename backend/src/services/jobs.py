@@ -4,8 +4,14 @@ from redis import Redis
 from src.config.settings import REDIS_URL
 from src.models import Dataset, Job
 from src.services.business import metadata
+from src.services import handovers
 def create(db, data, user):
-    if not db.get(Dataset,data.dataset_id): raise HTTPException(404,'数据批次不存在')
+    dataset=db.get(Dataset,data.dataset_id)
+    if not dataset: raise HTTPException(404,'数据批次不存在')
+    state=handovers.dataset_reconciliation(db,dataset)
+    # 旧批次没有交接清单，照常使用；挂了清单的批次必须整批吻合。
+    if state['status'] not in ('legacy','confirmed'):
+        raise HTTPException(409,'该数据批次尚未整批对账确认，暂不开放分析')
     allowed={p['key']:p for p in metadata().get('parameters',[])}
     if set(data.params)-set(allowed): raise HTTPException(422,'包含未知分析参数')
     params={k:p['default'] for k,p in allowed.items()}
@@ -22,6 +28,9 @@ def create(db, data, user):
             raise HTTPException(422,f'{p["label"]} 不是有效选项')
     j=Job(name=data.name, dataset_id=data.dataset_id, params=params, created_by=user.id, created_at=time.time(), status='queued')
     db.add(j); db.flush()
+    if state['status']=='confirmed':
+        # 认领明细、余额与已确认批次同事务冻结，分析只能使用确认时的账目。
+        handovers.freeze_claims(db,dataset.id)
     return j
 def enqueue(job_id):
     try:

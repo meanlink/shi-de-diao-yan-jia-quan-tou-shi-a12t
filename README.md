@@ -3,8 +3,8 @@
 加权透视汇总的真实业务分析小型项目。完整模拟客户、痛点、上下游、算法公式与一天工作剧本见 [BUSINESS.md](BUSINESS.md)。
 
 ## 模块与业务流程
-数据接入（JSON/CSV、字段验证、批次指纹）→ 参数化分析（异步 Python worker）→ 结果复核（指标、图形、明细、解释、批准）→ 定时分发（本地收件箱、CSV/JSON、SHA256）；另有业务总览和审计轨迹。
-三个贯穿全栈的实体：Dataset 数据批次、Job 分析任务、Report 分发计划；辅助 User、Audit、Delivery。
+数据接入（JSON/CSV、字段验证、批次指纹）→ 交接对账（纸质清单登记、日表逐行认领、整批确认）→ 参数化分析（异步 Python worker）→ 结果复核（指标、图形、明细、解释、批准）→ 定时分发（本地收件箱、CSV/JSON、SHA256）；另有业务总览和审计轨迹。
+三个贯穿全栈的实体：Dataset 数据批次、Job 分析任务、Report 分发计划；交接对账另有 HandoverList 纸质清单、HandoverItem 清单项、Claim 认领与 BatchReconciliation 批次确认。
 
 ## 快速启动
 ```bash
@@ -14,6 +14,10 @@ docker compose exec -T backend python -m scripts.seed_demo
 ```
 访问 http://localhost:18218；后端文档 http://localhost:19218/docs；数据库宿主端口 17718。
 `SEED_DEMO=true` 自动幂等 seed；不覆盖用户修改。手动 seed 命令可重复执行。
+
+## 交接对账
+纸质清单与日表分批录入后，在「交接对账」登记各日/各队/各区域的合格数与观察数，再到「数据接入」把日表批次挂到清单，逐行认领。累计认领不超清单，剩余合格数不超剩余观察数；同一批次行只能有一条有效认领，一项清单可分给多批。缺项、余量和逐行计数差异在清单详情可查。负责人确认整批吻合后分析才开放；旧批次（未挂清单）照常分析。
+认领与撤销在数据库条件更新中守住两项余额；撤销只退原认领量，已用于分析的认领冻结。确认分两阶段落库并支持幂等键，中断后启动恢复原账目，重试不重复扣减或新建批次。
 
 ## 演示账号与权限
 |账号|密码|真实权限|
@@ -25,11 +29,12 @@ docker compose exec -T backend python -m scripts.seed_demo
 ## 技术与本地开发
 Python 3.12 / FastAPI / SQLAlchemy / NumPy / SciPy / scikit-learn；PostgreSQL 16；Redis 7；Nginx；原生 HTML CSS JavaScript ES modules（用户指定）。后端所有校验、持久化和算法在服务端。无前端打包步骤。
 后端：安装 backend/requirements.txt，设置 DATABASE_URL、REDIS_URL、JWT_SECRET、ARTIFACT_DIR 后在 backend/ 执行 `python -m migrations.initial`、`python -m scripts.seed_demo`、`uvicorn src.main:app`，另开 `python -m src.worker`。前端使用带 /api 反向代理的 Nginx，直接打开 index.html 不支持 API。
+交接对账检查：`cd backend && python -m pytest tests/test_handovers.py -q`（SQLite + TestClient，不依赖容器）。
 
 ## 目录与工程约定
 backend/src/{models,schemas,services,routes,controllers,middlewares,constants,config,utils}；backend/scripts/seed_demo.py；backend/migrations/initial.py。
-frontend/src/{api,stores,types,components/common,hooks,pages,router,utils,constants}。
-Role 枚举：admin/analyst/viewer；JobStatus：queued/running/completed/failed。后端 backend/src/constants/enums.py，前端 frontend/src/constants/enums.js；路由权限在 middlewares/auth.py；页面按相同角色控制操作入口。
+frontend/src/{api,stores,types,components/common,hooks,pages,router,utils,constants}；页面含交接对账 handovers.js 与逐行认领 reconcile.js。
+Role 枚举：admin/analyst/viewer；JobStatus：queued/running/completed/failed；BatchStatus：legacy/pending_reconcile/pending_complete/ready/confirmed。后端 backend/src/constants/enums.py，前端 frontend/src/constants/enums.js；路由权限在 middlewares/auth.py；页面按相同角色控制操作入口。
 
 ## 环境变量与 Docker
 COMPOSE_PROJECT_NAME=survey-pivot；FRONTEND_PORT=18218；BACKEND_PORT=19218；DB_PORT=17718；DB_PASSWORD、JWT_SECRET 见 .env.example；SEED_DEMO 默认 true。共享命名产物卷供后端下载与 worker 写入，数据库/Redis 各持久卷。
